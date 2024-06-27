@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func init() {
+const BadgerDBPath = "/tmp/badger"
+
+func init() { //nolint:gochecknoinits // for testing
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 }
@@ -25,64 +25,106 @@ type TestJob struct {
 }
 
 func (j TestJob) Process(ctx JobContext) error {
-	fmt.Println("Job processed:", j.Msg, ctx.JobID(), ctx.JobCreatedAt().Unix())
+	fmt.Println("Test job processed:", j.Msg, ctx.JobID(), ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
 	return nil
 }
 
-func TestJobQueue(t *testing.T) {
-	// Open the Badger database
-	opts := badger.DefaultOptions("/tmp/badger")
-	opts.Logger = nil
-	db, err := badger.Open(opts)
-	if err != nil {
-		panic(err)
-	}
-	defer db.Close()
-
-	jq, err := NewJobQueue[TestJob](db, "test-job", 2)
+func TestJobQueue_Enqueue(t *testing.T) {
+	jq, err := NewJobQueue[TestJob](BadgerDBPath, "test-job", 0)
 	assert.NoError(t, err)
 
-	t.Run("Enqueue", func(t *testing.T) {
-		j := TestJob{Msg: "hello"}
-
-		id, err := jq.Enqueue(j)
-		assert.NoError(t, err)
-
-		// Verify job was stored in mock DB
-		value, err := readKey(db, id)
-		assert.NoError(t, err)
-
-		var recoveredJobEntry job[TestJob]
-		err = json.Unmarshal(value, &recoveredJobEntry)
-		assert.NoError(t, err)
-
-		assert.Equal(t, id, recoveredJobEntry.ID)
-		assert.Equal(t, j, recoveredJobEntry.Payload)
-		assert.Equal(t, JobStatusPending, recoveredJobEntry.Status)
-		assert.WithinDuration(t, time.Now(), recoveredJobEntry.CreatedAt, time.Second)
+	t.Cleanup(func() {
+		assert.NoError(t, jq.Stop())
+		cleanupBadgerDB(t)
 	})
 
-	t.Run("ProcessJob", func(t *testing.T) {
-		j := &job[TestJob]{
-			ID:        uuid.NewString(),
-			Payload:   TestJob{Msg: "world"},
-			Status:    JobStatusPending,
-			CreatedAt: time.Now(),
-		}
+	j := TestJob{Msg: "hello"}
 
-		err = jq.processJob(j)
-		require.NoError(t, err)
+	id, err := jq.Enqueue(j)
+	assert.NoError(t, err)
 
-		// Verify job status was updated in mock DB
-		value, err := readKey(db, j.ID)
-		require.NoError(t, err)
+	// Verify that the job was stored in badger DB
+	value, err := readKey(jq.db, id)
+	assert.NoError(t, err)
 
-		var recoveredJobEntry job[TestJob]
-		err = json.Unmarshal(value, &recoveredJobEntry)
-		require.NoError(t, err)
+	var dbJob job[TestJob]
+	err = json.Unmarshal(value, &dbJob)
+	assert.NoError(t, err)
 
-		assert.Equal(t, JobStatusCompleted, recoveredJobEntry.Status)
+	assert.Equal(t, id, dbJob.ID)
+	assert.Equal(t, j, dbJob.Payload)
+	assert.Equal(t, JobStatusPending, dbJob.Status)
+	assert.WithinDuration(t, time.Now(), dbJob.CreatedAt, time.Second)
+}
+
+func TestJobQueue_ProcessJob(t *testing.T) {
+	jq, err := NewJobQueue[TestJob](BadgerDBPath, "test-job", 0)
+	assert.NoError(t, err)
+
+	t.Cleanup(func() {
+		assert.NoError(t, jq.Stop())
+		cleanupBadgerDB(t)
 	})
+
+	// Queue a job
+	id, err := jq.Enqueue(TestJob{Msg: "hello"})
+	assert.NoError(t, err)
+
+	// Blocks until the job is fetched from badger
+	j := <-jq.jobs
+
+	// Check that the job is added to the in-memory index
+	assert.Contains(t, jq.isJobIDInQueue, id)
+
+	// Check that the job is what we're expecting
+	assert.Equal(t, id, j.ID)
+	assert.Equal(t, TestJob{Msg: "hello"}, j.Payload)
+	assert.Equal(t, JobStatusPending, j.Status)
+	assert.WithinDuration(t, time.Now(), j.CreatedAt, time.Second)
+
+	// Process the job
+	assert.NoError(t, jq.processJob(j))
+
+	// Check that the job is removed from the in-memory index
+	assert.NotContains(t, jq.isJobIDInQueue, id)
+
+	// Check that the job is no longer in the badger DB
+	value, err := readKey(jq.db, id)
+	assert.Error(t, err, badger.ErrKeyNotFound)
+	assert.Nil(t, value)
+}
+
+func TestJobQueue_Recovery(t *testing.T) {
+	// Create initial job queue
+	jq, err := NewJobQueue[TestJob]("/tmp/badger", "test-job", 0)
+	assert.NoError(t, err)
+
+	t.Cleanup(func() {
+		cleanupBadgerDB(t)
+	})
+
+	// Enqueue job to initial job queue
+	id, err := jq.Enqueue(TestJob{Msg: "hello"})
+	assert.NoError(t, err)
+
+	// Stop initial job queue
+	assert.NoError(t, jq.Stop())
+
+	// Create recovered job queue
+	recoveredJq, err := NewJobQueue[TestJob]("/tmp/badger", "test-job", 0)
+	assert.NoError(t, err)
+
+	j := <-recoveredJq.jobs
+
+	// Verify that the job is recovered correctly
+	assert.Equal(t, id, j.ID)
+	assert.Equal(t, j.Payload, TestJob{Msg: "hello"})
+
+	// Process the job in recovered job queue
+	assert.NoError(t, recoveredJq.processJob(j))
+
+	// Stop recovered job queue
+	assert.NoError(t, recoveredJq.Stop())
 }
 
 func readKey(db *badger.DB, key string) ([]byte, error) {
@@ -102,4 +144,8 @@ func readKey(db *badger.DB, key string) ([]byte, error) {
 	}
 
 	return valCopy, nil
+}
+
+func cleanupBadgerDB(t *testing.T) {
+	assert.NoError(t, os.RemoveAll(BadgerDBPath))
 }
