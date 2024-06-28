@@ -6,6 +6,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.2.0
 	github.com/goccy/go-json v0.10.3
 	github.com/google/uuid v1.6.0
+	github.com/puzpuzpuz/xsync/v3 v3.2.0
 	github.com/rs/zerolog v1.33.0
 	github.com/stretchr/testify v1.9.0
 )
