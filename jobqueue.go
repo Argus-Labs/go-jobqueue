@@ -24,11 +24,11 @@ const (
 
 // TODO: Use complete status for archiving completed jobs?
 
-var ErrJobChannelFull = errors.New("job channel is closed")
+var errJobChannelFull = errors.New("job channel is closed")
 
-const DefaultFetchInterval = 100 * time.Millisecond
-const DefaultJobBufferSize = 1000
-const DefaultJobIDSequenceSize = 100
+const defaultFetchInterval = 100 * time.Millisecond
+const defaultJobBufferSize = 1000
+const defaultJobIDSequenceSize = 100
 
 type JobQueue[T JobType] struct {
 	db     *badger.DB
@@ -65,9 +65,9 @@ func NewJobQueue[T JobType](dbPath string, name string, workers int, opts ...Opt
 		logger: log.With().Str("module", "JobQueue").Str("jobName", name).Logger(),
 
 		isJobIDInQueue: xsync.NewMapOf[uint64, bool](),
-		jobs:           make(chan *job[T], DefaultJobBufferSize),
+		jobs:           make(chan *job[T], defaultJobBufferSize),
 
-		fetchInterval: DefaultFetchInterval,
+		fetchInterval: defaultFetchInterval,
 	}
 	for _, opt := range opts {
 		opt(jq)
@@ -75,7 +75,7 @@ func NewJobQueue[T JobType](dbPath string, name string, workers int, opts ...Opt
 
 	jq.logger.Info().Msg("Starting job queue")
 
-	jq.jobID, err = jq.db.GetSequence([]byte("nextJobID"), DefaultJobIDSequenceSize)
+	jq.jobID, err = jq.db.GetSequence([]byte("nextJobID"), defaultJobIDSequenceSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start job id sequence: %w", err)
 	}
@@ -230,7 +230,7 @@ func (jq *JobQueue[T]) fetchJobs(ctx context.Context) error { //nolint:gocognit
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
-		for it.Seek([]byte(JobDBKeyPrefix)); it.ValidForPrefix([]byte(JobDBKeyPrefix)); it.Next() {
+		for it.Seek([]byte(jobDBKeyPrefix)); it.ValidForPrefix([]byte(jobDBKeyPrefix)); it.Next() {
 			item := it.Item()
 			err := item.Value(func(v []byte) error {
 				var job job[T]
@@ -259,7 +259,7 @@ func (jq *JobQueue[T]) fetchJobs(ctx context.Context) error { //nolint:gocognit
 					default:
 						jq.logger.Warn().Uint64("JobID",
 							job.ID).Msg("Found pending jobs, but job channel is full")
-						return ErrJobChannelFull
+						return errJobChannelFull
 					}
 				}
 

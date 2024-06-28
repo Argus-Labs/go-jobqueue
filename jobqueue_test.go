@@ -144,7 +144,7 @@ func TestJobQueue_Recovery(t *testing.T) {
 }
 
 func readJob(db *badger.DB, id uint64) ([]byte, error) {
-	return readKey(db, fmt.Sprintf("%s%d", JobDBKeyPrefix, id))
+	return readKey(db, fmt.Sprintf("%s%d", jobDBKeyPrefix, id))
 }
 
 func readKey(db *badger.DB, key string) ([]byte, error) {

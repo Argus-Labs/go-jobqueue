@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const JobDBKeyPrefix = "job-"
+const jobDBKeyPrefix = "job-"
 
 // JobType is a user-defined job struct that is processed by the job queue.
 // The struct must implement the Process method.
@@ -62,5 +62,5 @@ func (j *job[T]) Process() error {
 // dbKey BadgerDB iterates over keys in lexicographical order, so we need to make sure that the job ID
 // is strictly increasing to avoid queues being processed out of order.
 func (j *job[T]) dbKey() []byte {
-	return []byte(fmt.Sprintf("%s%d", JobDBKeyPrefix, j.ID))
+	return []byte(fmt.Sprintf("%s%d", jobDBKeyPrefix, j.ID))
 }
