@@ -1,16 +1,17 @@
 package jobqueue
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/goccy/go-json"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const BadgerDBPath = "/tmp/badger"
@@ -27,6 +28,87 @@ type TestJob struct {
 func (j TestJob) Process(ctx JobContext) error {
 	fmt.Println("Test job processed:", j.Msg, ctx.JobID(), ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
 	return nil
+}
+
+func TestNewJobQueue(t *testing.T) {
+	t.Parallel()
+
+	// Test cases
+	testCases := []struct {
+		name          string
+		dbPath        string
+		queueName     string
+		workers       int
+		options       []Option[TestJob]
+		expectedError bool
+		cleanupNeeded bool
+	}{
+		{
+			name:          "Valid configuration",
+			dbPath:        "/tmp/test_jobqueue_1",
+			queueName:     "test-queue-1",
+			workers:       2,
+			options:       nil,
+			expectedError: false,
+			cleanupNeeded: true,
+		},
+		{
+			name:          "Invalid workers count",
+			dbPath:        "/tmp/test_jobqueue_2",
+			queueName:     "test-queue-2",
+			workers:       -1,
+			options:       nil,
+			expectedError: true,
+			cleanupNeeded: false,
+		},
+		{
+			name:          "Zero workers",
+			dbPath:        "/tmp/test_jobqueue_3",
+			queueName:     "test-queue-3",
+			workers:       0,
+			options:       nil,
+			expectedError: false,
+			cleanupNeeded: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc // capture range variable
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Arrange
+			if tc.cleanupNeeded {
+				t.Cleanup(func() {
+					err := os.RemoveAll(tc.dbPath)
+					if err != nil {
+						return
+					}
+				})
+			}
+
+			// Act
+			jq, err := NewJobQueue[TestJob](tc.dbPath, tc.queueName, tc.workers, tc.options...)
+
+			// Assert
+			if tc.expectedError {
+				assert.Error(t, err)
+				assert.Nil(t, jq)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, jq)
+
+				assert.NotNil(t, jq.db)
+				assert.NotNil(t, jq.jobID)
+				assert.NotNil(t, jq.isJobIDInQueue)
+				assert.NotNil(t, jq.jobs)
+
+				// Cleanup
+				err = jq.Stop()
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestJobQueue_Enqueue(t *testing.T) {

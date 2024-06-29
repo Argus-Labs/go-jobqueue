@@ -14,3 +14,11 @@ func WithFetchInterval[T JobType](interval time.Duration) Option[T] {
 		jq.fetchInterval = interval
 	}
 }
+
+// WithJobBufferSize sets the size of the job channel.
+func WithJobBufferSize[T JobType](size int) Option[T] {
+	return func(jq *JobQueue[T]) {
+		jq.logger.Debug().Msg(fmt.Sprintf("Job buffer size set to %d", size))
+		jq.jobs = make(chan *job[T], size)
+	}
+}
