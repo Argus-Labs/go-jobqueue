@@ -7,8 +7,6 @@ import (
 
 const jobDBKeyPrefix = "job-"
 
-type JobHandler = func(JobContext, struct{}) error
-
 // JobContext provides context for a job which is injected into the job Process method.
 type JobContext interface {
 	JobID() uint64

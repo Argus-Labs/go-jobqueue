@@ -25,10 +25,12 @@ type testJob struct {
 	Msg string
 }
 
-func testJobHandler(ctx JobContext, job testJob) error {
-	fmt.Println("Test job processed:", job.Msg, ctx.JobID(),
-		ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
-	return nil
+func testJobHandler() func(JobContext, testJob) error {
+	return func(ctx JobContext, job testJob) error {
+		fmt.Println("Test job processed:", job.Msg, ctx.JobID(),
+			ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
+		return nil
+	}
 }
 
 func TestNewJobQueue(t *testing.T) {
@@ -89,7 +91,7 @@ func TestNewJobQueue(t *testing.T) {
 			}
 
 			// Act
-			jq, err := NewJobQueue[testJob](tc.dbPath, tc.queueName, tc.workers, testJobHandler, tc.options...)
+			jq, err := New[testJob](tc.dbPath, tc.queueName, tc.workers, testJobHandler(), tc.options...)
 
 			// Assert
 			if tc.expectedError {
@@ -115,7 +117,7 @@ func TestNewJobQueue(t *testing.T) {
 func TestJobQueue_Enqueue(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := NewJobQueue[testJob](BadgerDBPath, "test-job", 0, testJobHandler)
+	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -148,7 +150,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 func TestJobQueue_ProcessJob(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := NewJobQueue[testJob](BadgerDBPath, "test-job", 0, testJobHandler)
+	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -195,7 +197,7 @@ func TestJobQueue_Recovery(t *testing.T) {
 	cleanupBadgerDB(t)
 
 	// Create initial job queue
-	jq, err := NewJobQueue[testJob]("/tmp/badger", "test-job", 0, testJobHandler)
+	jq, err := New[testJob]("/tmp/badger", "test-job", 0, testJobHandler())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -210,7 +212,7 @@ func TestJobQueue_Recovery(t *testing.T) {
 	assert.NoError(t, jq.Stop())
 
 	// Create recovered job queue
-	recoveredJq, err := NewJobQueue[testJob]("/tmp/badger", "test-job", 0, testJobHandler)
+	recoveredJq, err := New[testJob]("/tmp/badger", "test-job", 0, testJobHandler())
 	assert.NoError(t, err)
 
 	j := <-recoveredJq.jobs

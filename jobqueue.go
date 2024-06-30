@@ -45,10 +45,10 @@ type JobQueue[T any] struct {
 	fetchInterval time.Duration
 }
 
-// NewJobQueue creates a new JobQueue with the specified database, name, and number
+// New creates a new JobQueue with the specified database, name, and number
 // of worker goroutines. It initializes the job queue, starts the worker goroutines,
 // and returns the JobQueue instance and an error, if any.
-func NewJobQueue[T any](
+func New[T any](
 	dbPath string, name string, workers int, handler func(JobContext, T) error, opts ...Option[T],
 ) (*JobQueue[T], error) {
 	if workers < 0 {
