@@ -228,7 +228,7 @@ func (jq *JobQueue[T]) pollJobs(ctx context.Context) {
 			jq.logger.Debug().Msg("Context cancelled, stopped fetching jobs")
 			return
 		case <-ticker.C:
-			jq.logger.Info().Msg("Polling for new jobs")
+			jq.logger.Debug().Msg("Polling for new jobs")
 			if err := jq.fetchJobs(ctx); err != nil {
 				jq.logger.Error().Err(err).Msg("Error fetching jobs")
 			}
