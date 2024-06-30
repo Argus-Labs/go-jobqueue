@@ -7,11 +7,7 @@ import (
 
 const jobDBKeyPrefix = "job-"
 
-// JobType is a user-defined job struct that is processed by the job queue.
-// The struct must implement the Process method.
-type JobType interface {
-	Process(JobContext) error
-}
+type JobHandler = func(JobContext, struct{}) error
 
 // JobContext provides context for a job which is injected into the job Process method.
 type JobContext interface {
@@ -20,17 +16,17 @@ type JobContext interface {
 }
 
 // Type job must implement the JobContext interface
-var _ JobContext = (*job[JobType])(nil)
+var _ JobContext = (*job[struct{}])(nil)
 
 // job is an internal representation of a job in the job queue.
-type job[T JobType] struct {
+type job[T any] struct {
 	ID        uint64    `json:"id"`
 	Payload   T         `json:"payload"`
 	Status    JobStatus `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func newJob[T JobType](id uint64, payload T) *job[T] {
+func newJob[T any](id uint64, payload T) *job[T] {
 	return &job[T]{
 		ID:        id,
 		Payload:   payload,
@@ -47,9 +43,9 @@ func (j *job[T]) JobCreatedAt() time.Time {
 	return j.CreatedAt
 }
 
-func (j *job[T]) Process() error {
+func (j *job[T]) Process(handler func(JobContext, T) error) error {
 	// Attempt to process the job
-	if err := j.Payload.Process(j); err != nil {
+	if err := handler(j, j.Payload); err != nil {
 		return err
 	}
 

@@ -21,12 +21,13 @@ func init() { //nolint:gochecknoinits // for testing
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 }
 
-type TestJob struct {
+type testJob struct {
 	Msg string
 }
 
-func (j TestJob) Process(ctx JobContext) error {
-	fmt.Println("Test job processed:", j.Msg, ctx.JobID(), ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
+func testJobHandler(ctx JobContext, job testJob) error {
+	fmt.Println("Test job processed:", job.Msg, ctx.JobID(),
+		ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
 	return nil
 }
 
@@ -39,7 +40,7 @@ func TestNewJobQueue(t *testing.T) {
 		dbPath        string
 		queueName     string
 		workers       int
-		options       []Option[TestJob]
+		options       []Option[testJob]
 		expectedError bool
 		cleanupNeeded bool
 	}{
@@ -88,7 +89,7 @@ func TestNewJobQueue(t *testing.T) {
 			}
 
 			// Act
-			jq, err := NewJobQueue[TestJob](tc.dbPath, tc.queueName, tc.workers, tc.options...)
+			jq, err := NewJobQueue[testJob](tc.dbPath, tc.queueName, tc.workers, testJobHandler, tc.options...)
 
 			// Assert
 			if tc.expectedError {
@@ -114,7 +115,7 @@ func TestNewJobQueue(t *testing.T) {
 func TestJobQueue_Enqueue(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := NewJobQueue[TestJob](BadgerDBPath, "test-job", 0)
+	jq, err := NewJobQueue[testJob](BadgerDBPath, "test-job", 0, testJobHandler)
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -123,7 +124,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 	})
 
 	for i := 0; i < 10; i++ {
-		j := TestJob{Msg: fmt.Sprintf("hello %d", i)}
+		j := testJob{Msg: fmt.Sprintf("hello %d", i)}
 
 		id, err := jq.Enqueue(j)
 		assert.NoError(t, err)
@@ -132,7 +133,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 		value, err := readJob(jq.db, id)
 		assert.NoError(t, err)
 
-		var dbJob job[TestJob]
+		var dbJob job[testJob]
 		err = json.Unmarshal(value, &dbJob)
 		assert.NoError(t, err)
 
@@ -147,7 +148,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 func TestJobQueue_ProcessJob(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := NewJobQueue[TestJob](BadgerDBPath, "test-job", 0)
+	jq, err := NewJobQueue[testJob](BadgerDBPath, "test-job", 0, testJobHandler)
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -158,7 +159,7 @@ func TestJobQueue_ProcessJob(t *testing.T) {
 	// Queue a bunch of jobs
 	ids := make([]uint64, 0)
 	for i := 0; i < 10; i++ {
-		j := TestJob{Msg: fmt.Sprintf("hello %d", i)}
+		j := testJob{Msg: fmt.Sprintf("hello %d", i)}
 
 		id, err := jq.Enqueue(j)
 		assert.NoError(t, err)
@@ -172,7 +173,7 @@ func TestJobQueue_ProcessJob(t *testing.T) {
 
 		// Check that the job is what we're expecting
 		assert.Equal(t, ids[i], j.ID)
-		assert.Equal(t, TestJob{Msg: fmt.Sprintf("hello %d", i)}, j.Payload)
+		assert.Equal(t, testJob{Msg: fmt.Sprintf("hello %d", i)}, j.Payload)
 		assert.Equal(t, JobStatusPending, j.Status)
 		assert.WithinDuration(t, time.Now(), j.CreatedAt, time.Second)
 
@@ -194,7 +195,7 @@ func TestJobQueue_Recovery(t *testing.T) {
 	cleanupBadgerDB(t)
 
 	// Create initial job queue
-	jq, err := NewJobQueue[TestJob]("/tmp/badger", "test-job", 0)
+	jq, err := NewJobQueue[testJob]("/tmp/badger", "test-job", 0, testJobHandler)
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -202,21 +203,21 @@ func TestJobQueue_Recovery(t *testing.T) {
 	})
 
 	// Enqueue job to initial job queue
-	id, err := jq.Enqueue(TestJob{Msg: "hello"})
+	id, err := jq.Enqueue(testJob{Msg: "hello"})
 	assert.NoError(t, err)
 
 	// Stop initial job queue
 	assert.NoError(t, jq.Stop())
 
 	// Create recovered job queue
-	recoveredJq, err := NewJobQueue[TestJob]("/tmp/badger", "test-job", 0)
+	recoveredJq, err := NewJobQueue[testJob]("/tmp/badger", "test-job", 0, testJobHandler)
 	assert.NoError(t, err)
 
 	j := <-recoveredJq.jobs
 
 	// Verify that the job is recovered correctly
 	assert.Equal(t, id, j.ID)
-	assert.Equal(t, j.Payload, TestJob{Msg: "hello"})
+	assert.Equal(t, j.Payload, testJob{Msg: "hello"})
 
 	// Process the job in recovered job queue
 	assert.NoError(t, recoveredJq.processJob(j))

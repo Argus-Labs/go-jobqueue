@@ -30,11 +30,12 @@ const defaultFetchInterval = 100 * time.Millisecond
 const defaultJobBufferSize = 1000
 const defaultJobIDSequenceSize = 100
 
-type JobQueue[T JobType] struct {
-	db     *badger.DB
-	wg     sync.WaitGroup
-	logger zerolog.Logger
-	cancel context.CancelFunc
+type JobQueue[T any] struct {
+	db      *badger.DB
+	wg      sync.WaitGroup
+	logger  zerolog.Logger
+	cancel  context.CancelFunc
+	handler func(JobContext, T) error
 
 	jobID          *badger.Sequence
 	isJobIDInQueue *xsync.MapOf[uint64, bool]
@@ -47,7 +48,9 @@ type JobQueue[T JobType] struct {
 // NewJobQueue creates a new JobQueue with the specified database, name, and number
 // of worker goroutines. It initializes the job queue, starts the worker goroutines,
 // and returns the JobQueue instance and an error, if any.
-func NewJobQueue[T JobType](dbPath string, name string, workers int, opts ...Option[T]) (*JobQueue[T], error) {
+func NewJobQueue[T any](
+	dbPath string, name string, workers int, handler func(JobContext, T) error, opts ...Option[T],
+) (*JobQueue[T], error) {
 	if workers < 0 {
 		return nil, errors.New("invalid number of workers")
 	} else if workers == 0 {
@@ -60,9 +63,10 @@ func NewJobQueue[T JobType](dbPath string, name string, workers int, opts ...Opt
 	}
 
 	jq := &JobQueue[T]{
-		db:     db,
-		wg:     sync.WaitGroup{},
-		logger: log.With().Str("module", "JobQueue").Str("jobName", name).Logger(),
+		db:      db,
+		wg:      sync.WaitGroup{},
+		logger:  log.With().Str("module", "JobQueue").Str("jobName", name).Logger(),
+		handler: handler,
 
 		isJobIDInQueue: xsync.NewMapOf[uint64, bool](),
 		jobs:           make(chan *job[T], defaultJobBufferSize),
@@ -150,7 +154,7 @@ func (jq *JobQueue[T]) processJob(job *job[T]) error {
 		logger.Info().Msg("Processing job")
 	}
 
-	if err := job.Process(); err != nil {
+	if err := job.Process(jq.handler); err != nil {
 		return fmt.Errorf("failed to process job: %w", err)
 	}
 
