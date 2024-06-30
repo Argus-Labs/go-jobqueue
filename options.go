@@ -22,3 +22,11 @@ func WithJobBufferSize[T any](size int) Option[T] {
 		jq.jobs = make(chan *job[T], size)
 	}
 }
+
+// WithInmemDB uses an in-memory BadgerDB instead of a persistent one.
+// Useful for testing, but provides no durability guarantees.
+func WithInmemDB[T any]() Option[T] {
+	return func(jq *JobQueue[T]) {
+		jq.dbInMemory = true
+	}
+}

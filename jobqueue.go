@@ -31,7 +31,10 @@ const defaultJobBufferSize = 1000
 const defaultJobIDSequenceSize = 100
 
 type JobQueue[T any] struct {
-	db      *badger.DB
+	db         *badger.DB
+	dbPath     string
+	dbInMemory bool
+
 	wg      sync.WaitGroup
 	logger  zerolog.Logger
 	cancel  context.CancelFunc
@@ -57,17 +60,17 @@ func New[T any](
 		log.Warn().Msg("Number of workers is 0, jobs will not be automatically processed")
 	}
 
-	db, err := openDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-
 	jq := &JobQueue[T]{
-		db:      db,
+		db:         nil,
+		dbPath:     dbPath,
+		dbInMemory: false,
+
 		wg:      sync.WaitGroup{},
 		logger:  log.With().Str("module", "JobQueue").Str("jobName", name).Logger(),
+		cancel:  nil,
 		handler: handler,
 
+		jobID:          nil,
 		isJobIDInQueue: xsync.NewMapOf[uint64, bool](),
 		jobs:           make(chan *job[T], defaultJobBufferSize),
 
@@ -77,15 +80,21 @@ func New[T any](
 		opt(jq)
 	}
 
+	db, err := jq.openDB()
+	if err != nil {
+		return nil, err
+	}
+	jq.db = db
+
 	jq.logger.Info().Msg("Starting job queue")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	jq.cancel = cancel
 
 	jq.jobID, err = jq.db.GetSequence([]byte("nextJobID"), defaultJobIDSequenceSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start job id sequence: %w", err)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	jq.cancel = cancel
 
 	// Load jobs from BadgerDB
 	go jq.pollJobs(ctx)
@@ -282,8 +291,13 @@ func (jq *JobQueue[T]) fetchJobs(ctx context.Context) error { //nolint:gocognit
 	return nil
 }
 
-func openDB(dbPath string) (*badger.DB, error) {
-	opts := badger.DefaultOptions(dbPath)
+func (jq *JobQueue[T]) openDB() (*badger.DB, error) {
+	var opts badger.Options
+	if jq.dbInMemory {
+		opts = badger.DefaultOptions("").WithInMemory(true)
+	} else {
+		opts = badger.DefaultOptions(jq.dbPath)
+	}
 	opts.Logger = nil
 
 	db, err := badger.Open(opts)

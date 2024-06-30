@@ -27,8 +27,8 @@ type testJob struct {
 
 func testJobHandler() func(JobContext, testJob) error {
 	return func(ctx JobContext, job testJob) error {
-		fmt.Println("Test job processed:", job.Msg, ctx.JobID(),
-			ctx.JobCreatedAt().Unix()) //nolint:forbidigo // for testing
+		fmt.Println("Test job processed:", job.Msg, ctx.JobID(), //nolint:forbidigo // for testing
+			ctx.JobCreatedAt().Unix())
 		return nil
 	}
 }
@@ -51,27 +51,24 @@ func TestNewJobQueue(t *testing.T) {
 			dbPath:        "/tmp/test_jobqueue_1",
 			queueName:     "test-queue-1",
 			workers:       2,
-			options:       nil,
+			options:       []Option[testJob]{WithInmemDB[testJob]()},
 			expectedError: false,
-			cleanupNeeded: true,
 		},
 		{
 			name:          "Invalid workers count",
 			dbPath:        "/tmp/test_jobqueue_2",
 			queueName:     "test-queue-2",
 			workers:       -1,
-			options:       nil,
+			options:       []Option[testJob]{WithInmemDB[testJob]()},
 			expectedError: true,
-			cleanupNeeded: false,
 		},
 		{
 			name:          "Zero workers",
 			dbPath:        "/tmp/test_jobqueue_3",
 			queueName:     "test-queue-3",
 			workers:       0,
-			options:       nil,
+			options:       []Option[testJob]{WithInmemDB[testJob]()},
 			expectedError: false,
-			cleanupNeeded: true,
 		},
 	}
 
@@ -79,16 +76,6 @@ func TestNewJobQueue(t *testing.T) {
 		tc := tc // capture range variable
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			// Arrange
-			if tc.cleanupNeeded {
-				t.Cleanup(func() {
-					err := os.RemoveAll(tc.dbPath)
-					if err != nil {
-						return
-					}
-				})
-			}
 
 			// Act
 			jq, err := New[testJob](tc.dbPath, tc.queueName, tc.workers, testJobHandler(), tc.options...)
@@ -117,12 +104,11 @@ func TestNewJobQueue(t *testing.T) {
 func TestJobQueue_Enqueue(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler())
+	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInmemDB[testJob]())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
 		assert.NoError(t, jq.Stop())
-		cleanupBadgerDB(t)
 	})
 
 	for i := 0; i < 10; i++ {
@@ -150,12 +136,11 @@ func TestJobQueue_Enqueue(t *testing.T) {
 func TestJobQueue_ProcessJob(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler())
+	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInmemDB[testJob]())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
 		assert.NoError(t, jq.Stop())
-		cleanupBadgerDB(t)
 	})
 
 	// Queue a bunch of jobs
