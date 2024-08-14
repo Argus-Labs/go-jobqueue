@@ -1,4 +1,4 @@
-module github.com/argus-labs/go-jobqueue
+module github.com/ezavada/go-jobqueue
 
 go 1.22
 
