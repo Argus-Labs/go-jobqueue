@@ -10,6 +10,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/goccy/go-json"
+	"github.com/loov/hrtime"
 	"github.com/puzpuzpuz/xsync/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -46,6 +47,21 @@ type JobQueue[T any] struct {
 
 	// Options
 	fetchInterval time.Duration
+
+	// Stats
+	statsLock sync.Mutex // protects the stats below
+
+	// job stats
+	jobRunTime    TimeStat // stats on time that it takes to run a job (across all workers)
+	jobQueuedTime TimeStat // stats on how much time a job sits in the queue before being processed
+
+	// queue stats
+	busyTime      TimeStat // stats on time that the queue actively processing jobs
+	idleTime      TimeStat // stats on how much time the queue is empty between jobs being processed
+	jobsProcessed int
+	jobsEnqueued  int
+	jobsFailed    int
+	jobsSucceeded int
 }
 
 // New creates a new JobQueue with the specified database, name, and number
@@ -75,6 +91,16 @@ func New[T any](
 		jobs:           make(chan *job[T], defaultJobBufferSize),
 
 		fetchInterval: defaultFetchInterval,
+
+		statsLock:     sync.Mutex{},
+		jobRunTime:    TimeStat{},
+		jobQueuedTime: TimeStat{},
+		busyTime:      TimeStat{},
+		idleTime:      TimeStat{},
+		jobsProcessed: 0,
+		jobsEnqueued:  0,
+		jobsFailed:    0,
+		jobsSucceeded: 0,
 	}
 	for _, opt := range opts {
 		opt(jq)
@@ -131,6 +157,9 @@ func (jq *JobQueue[T]) Enqueue(payload T) (uint64, error) {
 		jq.logger.Error().Err(err).Uint64("jobID", job.ID).Msg("Failed to enqueue job")
 		return 0, err
 	}
+	jq.statsLock.Lock()
+	jq.jobsEnqueued++
+	jq.statsLock.Unlock()
 
 	jq.logger.Info().Uint64("jobID", job.ID).Msg("job enqueued successfully")
 	return job.ID, nil
@@ -163,15 +192,26 @@ func (jq *JobQueue[T]) processJob(job *job[T], worker int) error {
 		logger.Info().Int("worker", worker).Msg("Processing job")
 	}
 
-	if err := job.Process(jq.handler); err != nil {
+	queuedTime := time.Since(job.CreatedAt)
+	startTime := hrtime.Now()
+	err := job.Process(jq.handler)
+	runTime := hrtime.Since(startTime)
+	jq.statsLock.Lock()
+	jq.jobsProcessed++
+	jq.jobRunTime.RecordTime(runTime)
+	jq.jobQueuedTime.RecordTime(queuedTime)
+	if err != nil {
+		jq.jobsFailed++
+		jq.statsLock.Unlock()
 		return fmt.Errorf("failed to process job: %w", err)
 	}
-
+	jq.jobsSucceeded++
+	jq.statsLock.Unlock()
 	logger.Info().Msg("Job processed successfully")
 
 	// Now that we've successfully processed the job, we can remove it from BadgerDB
 	jq.logger.Debug().Uint64("jobID", job.ID).Int("worker", worker).Msg("Removing job from BadgerDB")
-	err := jq.db.Update(func(txn *badger.Txn) error {
+	err = jq.db.Update(func(txn *badger.Txn) error {
 		if err := txn.Delete(job.dbKey()); err != nil {
 			return err
 		}
@@ -211,6 +251,17 @@ func (jq *JobQueue[T]) Stop() error {
 	if err := jq.db.Close(); err != nil {
 		jq.logger.Error().Err(err).Msg("Failed to close Badger DB connection")
 		return err
+	}
+
+	if jq.jobsEnqueued+jq.jobsProcessed > 0 {
+		jq.logger.Info().
+			Int("jobsProcessed", jq.jobsProcessed).
+			Int("jobsEnqueued", jq.jobsEnqueued).
+			Int("jobsFailed", jq.jobsFailed).
+			Int("jobsSucceeded", jq.jobsSucceeded).
+			Str("jobRunTime", jq.jobRunTime.String()).
+			Str("jobQueuedTime", jq.jobQueuedTime.String()).
+			Msg("Job queue stats")
 	}
 
 	jq.logger.Info().Msg("Job queue stopped successfully")
