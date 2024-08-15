@@ -145,7 +145,7 @@ func (jq *JobQueue[T]) worker(id int) {
 
 	// Worker stops running when the job channel is closed
 	for job := range jq.jobs {
-		err := jq.processJob(job)
+		err := jq.processJob(job, id)
 		if err != nil {
 			logger.Error().Err(err).Uint64("jobID", job.ID).Msg("Error processing job")
 		}
@@ -155,12 +155,12 @@ func (jq *JobQueue[T]) worker(id int) {
 }
 
 // processJob processes a job and updates its status in the database.
-func (jq *JobQueue[T]) processJob(job *job[T]) error {
+func (jq *JobQueue[T]) processJob(job *job[T], worker int) error {
 	logger := jq.logger.With().Uint64("jobID", job.ID).Logger()
 	if logger.GetLevel() == zerolog.DebugLevel {
-		logger.Debug().Interface("jobPayload", job.Payload).Msg("Processing job")
+		logger.Debug().Interface("jobPayload", job.Payload).Int("worker", worker).Msg("Processing job")
 	} else {
-		logger.Info().Msg("Processing job")
+		logger.Info().Int("worker", worker).Msg("Processing job")
 	}
 
 	if err := job.Process(jq.handler); err != nil {
@@ -170,7 +170,7 @@ func (jq *JobQueue[T]) processJob(job *job[T]) error {
 	logger.Info().Msg("Job processed successfully")
 
 	// Now that we've successfully processed the job, we can remove it from BadgerDB
-	jq.logger.Debug().Uint64("jobID", job.ID).Msg("Removing job from BadgerDB")
+	jq.logger.Debug().Uint64("jobID", job.ID).Int("worker", worker).Msg("Removing job from BadgerDB")
 	err := jq.db.Update(func(txn *badger.Txn) error {
 		if err := txn.Delete(job.dbKey()); err != nil {
 			return err
@@ -183,7 +183,7 @@ func (jq *JobQueue[T]) processJob(job *job[T]) error {
 	}
 
 	// Remove the job from the in-memory index
-	jq.logger.Debug().Uint64("jobID", job.ID).Msg("Removing job from in-memory index")
+	jq.logger.Debug().Uint64("jobID", job.ID).Int("worker", worker).Msg("Removing job from in-memory index")
 	jq.isJobIDInQueue.Delete(job.ID)
 
 	return nil

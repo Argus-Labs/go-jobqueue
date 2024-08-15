@@ -165,7 +165,7 @@ func TestJobQueue_ProcessJob(t *testing.T) {
 		assert.WithinDuration(t, time.Now(), j.CreatedAt, time.Second)
 
 		// Process the job
-		assert.NoError(t, jq.processJob(j))
+		assert.NoError(t, jq.processJob(j, 0))
 
 		// Check that the job is removed from the in-memory index
 		_, ok := jq.isJobIDInQueue.Load(ids[i])
@@ -207,10 +207,35 @@ func TestJobQueue_Recovery(t *testing.T) {
 	assert.Equal(t, j.Payload, testJob{Msg: "hello"})
 
 	// Process the job in recovered job queue
-	assert.NoError(t, recoveredJq.processJob(j))
+	assert.NoError(t, recoveredJq.processJob(j, 0))
 
 	// Stop recovered job queue
 	assert.NoError(t, recoveredJq.Stop())
+}
+
+func TestJobConcurrency(t *testing.T) {
+	cleanupBadgerDB(t)
+
+	// create initial job queue
+	jq, err := New[testJob]("/tmp/badger", "test-job", 5, testJobHandler())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, jq.Stop())
+		cleanupBadgerDB(t)
+	})
+
+	// Queue a bunch of jobs, which should be processed concurrently
+	//ids := make([]uint64, 0)
+	for i := 0; i < 20; i++ {
+		j := testJob{Msg: fmt.Sprintf("hello %d", i)}
+
+		_, err := jq.Enqueue(j)
+		assert.NoError(t, err)
+
+		//ids = append(ids, id)
+	}
+
+	time.Sleep(time.Second)
 }
 
 func readJob(db *badger.DB, id uint64) ([]byte, error) {
