@@ -2,7 +2,9 @@ package jobqueue
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -27,8 +29,20 @@ type testJob struct {
 
 func testJobHandler() func(JobContext, testJob) error {
 	return func(ctx JobContext, job testJob) error {
-		fmt.Println("Test job processed:", job.Msg, ctx.JobID(), //nolint:forbidigo // for testing
+		fmt.Println("Job Performed:", job.Msg, ctx.JobID(), //nolint:forbidigo // for testing
 			ctx.JobCreatedAt().Unix())
+		return nil
+	}
+}
+
+func complexJobHandler() func(JobContext, testJob) error {
+	return func(ctx JobContext, job testJob) error {
+		fmt.Println("Starting job...", job.Msg, ctx.JobID(), //nolint:forbidigo // for testing
+			ctx.JobCreatedAt().Unix())
+		numMicroseconds := rand.Int63n(200) + 1
+		time.Sleep(time.Duration(numMicroseconds) * time.Microsecond)
+		fmt.Println("Job completed:", job.Msg, ctx.JobID(), //nolint:forbidigo // for testing
+			ctx.JobCreatedAt().Unix(), "after "+strconv.FormatInt(numMicroseconds, 10)+"µs")
 		return nil
 	}
 }
@@ -217,7 +231,7 @@ func TestJobConcurrency(t *testing.T) {
 	cleanupBadgerDB(t)
 
 	// create initial job queue
-	jq, err := New[testJob]("/tmp/badger", "test-job", 5, testJobHandler())
+	jq, err := New[testJob]("/tmp/badger", "test-job", 5, complexJobHandler())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, jq.Stop())
@@ -238,14 +252,27 @@ func TestJobConcurrency(t *testing.T) {
 	// Give time for all jobs to be processed
 	time.Sleep(time.Second)
 
+	// add a few more new jobs
+	for i := 20; i < 22; i++ {
+		j := testJob{Msg: fmt.Sprintf("hello %d", i)}
+
+		id, err := jq.Enqueue(j)
+		assert.NoError(t, err)
+
+		ids = append(ids, id)
+	}
+
+	// more time for new jobs to be processed
+	time.Sleep(time.Second)
+
 	// Check that all jobs were processed
-	for i := 0; i < 10; i++ {
+	for id := range ids {
 		// Check that the job is removed from the in-memory index
-		_, ok := jq.isJobIDInQueue.Load(ids[i])
+		_, ok := jq.isJobIDInQueue.Load(uint64(id))
 		assert.False(t, ok)
 
 		// Check that the job is no longer in the badger DB
-		value, err := readJob(jq.db, ids[i])
+		value, err := readJob(jq.db, uint64(id))
 		assert.Error(t, err, badger.ErrKeyNotFound)
 		assert.Nil(t, value)
 	}

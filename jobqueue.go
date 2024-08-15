@@ -14,6 +14,8 @@ import (
 	"github.com/puzpuzpuz/xsync/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"go.uber.org/atomic"
 )
 
 type JobStatus string
@@ -62,6 +64,10 @@ type JobQueue[T any] struct {
 	jobsEnqueued  int
 	jobsFailed    int
 	jobsSucceeded int
+
+	busyWorkerCount   atomic.Int32
+	busyStateChangeAt atomic.Time
+	queueIsIdle       atomic.Bool
 }
 
 // New creates a new JobQueue with the specified database, name, and number
@@ -95,13 +101,18 @@ func New[T any](
 		statsLock:     sync.Mutex{},
 		jobRunTime:    TimeStat{},
 		jobQueuedTime: TimeStat{},
-		busyTime:      TimeStat{},
-		idleTime:      TimeStat{},
+		busyTime:      TimeStat{}, // wall time, not CPU time
+		idleTime:      TimeStat{}, // wall time, not CPU time
 		jobsProcessed: 0,
 		jobsEnqueued:  0,
 		jobsFailed:    0,
 		jobsSucceeded: 0,
 	}
+
+	jq.busyWorkerCount.Store(0)
+	jq.busyStateChangeAt.Store(time.Now())
+	jq.queueIsIdle.Store(true)
+
 	for _, opt := range opts {
 		opt(jq)
 	}
@@ -174,7 +185,28 @@ func (jq *JobQueue[T]) worker(id int) {
 
 	// Worker stops running when the job channel is closed
 	for job := range jq.jobs {
+
+		wasIdle := jq.queueIsIdle.Swap(false)
+		jq.busyWorkerCount.Inc()
+		if wasIdle {
+			timeSpentInState := time.Since(jq.busyStateChangeAt.Load())
+			jq.busyStateChangeAt.Store(time.Now())
+			jq.idleTime.RecordTime(timeSpentInState)
+			logger.Debug().Dur("timeIdle", timeSpentInState).Msg("*** Queue now busy *** ")
+		}
+
 		err := jq.processJob(job, id)
+
+		if jq.busyWorkerCount.Dec() == 0 {
+			wasIdle := jq.queueIsIdle.Swap(true)
+			if !wasIdle {
+				timeSpentInState := time.Since(jq.busyStateChangeAt.Load())
+				jq.busyStateChangeAt.Store(time.Now())
+				jq.busyTime.RecordTime(timeSpentInState)
+				logger.Debug().Dur("timeBusy", timeSpentInState).Msg("*** Queue now idle *** ")
+			}
+		}
+
 		if err != nil {
 			logger.Error().Err(err).Uint64("jobID", job.ID).Msg("Error processing job")
 		}
@@ -261,6 +293,8 @@ func (jq *JobQueue[T]) Stop() error {
 			Int("jobsSucceeded", jq.jobsSucceeded).
 			Str("jobRunTime", jq.jobRunTime.String()).
 			Str("jobQueuedTime", jq.jobQueuedTime.String()).
+			Str("busyTime", jq.busyTime.String()).
+			Str("idleTime", jq.idleTime.String()).
 			Msg("Job queue stats")
 	}
 

@@ -1,6 +1,7 @@
 package jobqueue
 
 import (
+	"strconv"
 	"time"
 )
 
@@ -8,7 +9,7 @@ type TimeStat struct {
 	TotalTime time.Duration
 	MinTime   time.Duration
 	MaxTime   time.Duration
-	Count     int
+	Count     int64
 }
 
 func (ts *TimeStat) AvgTime() time.Duration {
@@ -37,5 +38,5 @@ func (ts *TimeStat) RecordTime(duration time.Duration) {
 }
 
 func (ts *TimeStat) String() string {
-	return "tot " + ts.TotalTime.String() + " avg " + ts.AvgTime().String() + " min " + ts.MinTime.String() + " max " + ts.MaxTime.String()
+	return "tot " + ts.TotalTime.String() + " cnt " + strconv.FormatInt(ts.Count, 10) + " avg " + ts.AvgTime().String() + " min " + ts.MinTime.String() + " max " + ts.MaxTime.String()
 }

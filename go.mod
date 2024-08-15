@@ -11,6 +11,8 @@ require (
 	github.com/stretchr/testify v1.9.0
 )
 
+require go.uber.org/atomic v1.11.0 // indirect
+
 require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
