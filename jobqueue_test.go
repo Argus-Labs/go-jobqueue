@@ -225,17 +225,31 @@ func TestJobConcurrency(t *testing.T) {
 	})
 
 	// Queue a bunch of jobs, which should be processed concurrently
-	//ids := make([]uint64, 0)
+	ids := make([]uint64, 0)
 	for i := 0; i < 20; i++ {
 		j := testJob{Msg: fmt.Sprintf("hello %d", i)}
 
-		_, err := jq.Enqueue(j)
+		id, err := jq.Enqueue(j)
 		assert.NoError(t, err)
 
-		//ids = append(ids, id)
+		ids = append(ids, id)
 	}
 
+	// Give time for all jobs to be processed
 	time.Sleep(time.Second)
+
+	// Check that all jobs were processed
+	for i := 0; i < 10; i++ {
+		// Check that the job is removed from the in-memory index
+		_, ok := jq.isJobIDInQueue.Load(ids[i])
+		assert.False(t, ok)
+
+		// Check that the job is no longer in the badger DB
+		value, err := readJob(jq.db, ids[i])
+		assert.Error(t, err, badger.ErrKeyNotFound)
+		assert.Nil(t, value)
+	}
+
 }
 
 func readJob(db *badger.DB, id uint64) ([]byte, error) {
