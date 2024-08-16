@@ -34,6 +34,7 @@ type JobQueue[T any] struct {
 	db         JobQueueDb[T]
 	dbPath     string
 	dbInMemory bool
+	dbUseMongo bool
 
 	wg      sync.WaitGroup
 	logger  zerolog.Logger
@@ -83,6 +84,7 @@ func New[T any](
 		db:         nil,
 		dbPath:     dbPath,
 		dbInMemory: false,
+		dbUseMongo: false,
 
 		wg:      sync.WaitGroup{},
 		logger:  log.With().Str("module", "JobQueue").Str("jobName", name).Logger(),
@@ -114,9 +116,14 @@ func New[T any](
 		opt(jq)
 	}
 
-	// TODO: figure out better way to do options for JobQueue DB
-	db := NewJobQueueDbBadger[T](jq.dbInMemory) // hardcoding BadgerDB for now. Add option for other DBs later
-
+	// Open JobQueue DB
+	var db JobQueueDb[T]
+	if jq.dbUseMongo {
+		dbPath = jq.dbPath // this will have been set by the options
+		db = NewJobQueueDbMongo[T]()
+	} else {
+		db = NewJobQueueDbBadger[T](jq.dbInMemory)
+	}
 	err := db.Open(dbPath, name)
 	if err != nil {
 		return nil, err
