@@ -65,7 +65,7 @@ func TestNewJobQueue(t *testing.T) {
 			dbPath:        "/tmp/test_jobqueue_1",
 			queueName:     "test-queue-1",
 			workers:       2,
-			options:       []Option[testJob]{WithInmemDB[testJob]()},
+			options:       []Option[testJob]{WithInMemDB[testJob]()},
 			expectedError: false,
 		},
 		{
@@ -73,7 +73,7 @@ func TestNewJobQueue(t *testing.T) {
 			dbPath:        "/tmp/test_jobqueue_2",
 			queueName:     "test-queue-2",
 			workers:       -1,
-			options:       []Option[testJob]{WithInmemDB[testJob]()},
+			options:       []Option[testJob]{WithInMemDB[testJob]()},
 			expectedError: true,
 		},
 		{
@@ -81,7 +81,7 @@ func TestNewJobQueue(t *testing.T) {
 			dbPath:        "/tmp/test_jobqueue_3",
 			queueName:     "test-queue-3",
 			workers:       0,
-			options:       []Option[testJob]{WithInmemDB[testJob]()},
+			options:       []Option[testJob]{WithInMemDB[testJob]()},
 			expectedError: false,
 		},
 	}
@@ -118,7 +118,7 @@ func TestNewJobQueue(t *testing.T) {
 func TestJobQueue_Enqueue(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInmemDB[testJob]())
+	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInMemDB[testJob]())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -150,7 +150,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 func TestJobQueue_ProcessJob(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInmemDB[testJob]())
+	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInMemDB[testJob]())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
