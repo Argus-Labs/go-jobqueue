@@ -63,10 +63,10 @@ func (jqdb *JobQueueDbBadger[T]) Open(path string, queueName string) error {
 func (jqdb *JobQueueDbBadger[T]) Close() error {
 	//jqdb.logger.Debug().Msg("Closing Badger DB connection")
 	if err := jqdb.jobID.Release(); err != nil {
-		//jqdb.logger.Error().Err(err).Msg("Failed to release next job id sequence")
+		jqdb.logger.Error().Err(err).Msg("Failed to release next job id sequence")
 	}
 	if err := jqdb.db.Close(); err != nil {
-		//jqdb.logger.Error().Err(err).Msg("Failed to close Badger DB connection")
+		jqdb.logger.Error().Err(err).Msg("Failed to close Badger DB connection")
 		return err
 	}
 	return nil
@@ -134,9 +134,6 @@ func (jqdb *JobQueueDbBadger[T]) ReadJob(jobID uint64) (*job[T], error) {
 	if err := json.Unmarshal(val, &theJob); err != nil {
 		jqdb.logger.Error().Err(err).Uint64("jobID",
 			binary.BigEndian.Uint64(theItem.Key())).Msg("Failed to unmarshal job")
-		return nil, err
-	}
-	if err != nil {
 		return nil, err
 	}
 
