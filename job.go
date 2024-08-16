@@ -1,11 +1,8 @@
 package jobqueue
 
 import (
-	"fmt"
 	"time"
 )
-
-const jobDBKeyPrefix = "job-"
 
 // JobContext provides context for a job which is injected into the job Process method.
 type JobContext interface {
@@ -51,10 +48,4 @@ func (j *job[T]) Process(handler func(JobContext, T) error) error {
 	j.Status = JobStatusCompleted
 
 	return nil
-}
-
-// dbKey BadgerDB iterates over keys in lexicographical order, so we need to make sure that the job ID
-// is strictly increasing to avoid queues being processed out of order.
-func (j *job[T]) dbKey() []byte {
-	return []byte(fmt.Sprintf("%s%d", jobDBKeyPrefix, j.ID))
 }

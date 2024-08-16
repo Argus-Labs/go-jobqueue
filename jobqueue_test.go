@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/goccy/go-json"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -103,7 +102,6 @@ func TestNewJobQueue(t *testing.T) {
 				require.NotNil(t, jq)
 
 				assert.NotNil(t, jq.db)
-				assert.NotNil(t, jq.jobID)
 				assert.NotNil(t, jq.isJobIDInQueue)
 				assert.NotNil(t, jq.jobs)
 
@@ -132,11 +130,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Verify that the job was stored in badger DB
-		value, err := readJob(jq.db, id)
-		assert.NoError(t, err)
-
-		var dbJob job[testJob]
-		err = json.Unmarshal(value, &dbJob)
+		dbJob, err := jq.db.ReadJob(id)
 		assert.NoError(t, err)
 
 		// Verify that the job is what we're expecting
@@ -186,9 +180,9 @@ func TestJobQueue_ProcessJob(t *testing.T) {
 		assert.False(t, ok)
 
 		// Check that the job is no longer in the badger DB
-		value, err := readJob(jq.db, ids[i])
+		dbJob, err := jq.db.ReadJob(ids[i])
 		assert.Error(t, err, badger.ErrKeyNotFound)
-		assert.Nil(t, value)
+		assert.Nil(t, dbJob)
 	}
 }
 
@@ -272,34 +266,11 @@ func TestJobConcurrency(t *testing.T) {
 		assert.False(t, ok)
 
 		// Check that the job is no longer in the badger DB
-		value, err := readJob(jq.db, uint64(id))
+		job, err := jq.db.ReadJob(uint64(id))
 		assert.Error(t, err, badger.ErrKeyNotFound)
-		assert.Nil(t, value)
+		assert.Nil(t, job)
 	}
 
-}
-
-func readJob(db *badger.DB, id uint64) ([]byte, error) {
-	return readKey(db, fmt.Sprintf("%s%d", jobDBKeyPrefix, id))
-}
-
-func readKey(db *badger.DB, key string) ([]byte, error) {
-	var valCopy []byte
-	err := db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(key))
-		if err != nil {
-			return err
-		}
-
-		valCopy, err = item.ValueCopy(nil)
-		return err
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return valCopy, nil
 }
 
 func cleanupBadgerDB(t *testing.T) {

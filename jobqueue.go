@@ -2,14 +2,11 @@ package jobqueue
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
-	"github.com/goccy/go-json"
 	"github.com/loov/hrtime"
 	"github.com/puzpuzpuz/xsync/v3"
 	"github.com/rs/zerolog"
@@ -31,10 +28,10 @@ var errJobChannelFull = errors.New("job channel is closed")
 
 const defaultFetchInterval = 100 * time.Millisecond
 const defaultJobBufferSize = 1000
-const defaultJobIDSequenceSize = 100
+const defaultJobsPerFetch = 10
 
 type JobQueue[T any] struct {
-	db         *badger.DB
+	db         JobQueueDb[T]
 	dbPath     string
 	dbInMemory bool
 
@@ -43,12 +40,12 @@ type JobQueue[T any] struct {
 	cancel  context.CancelFunc
 	handler func(JobContext, T) error
 
-	jobID          *badger.Sequence
 	isJobIDInQueue *xsync.MapOf[uint64, bool]
 	jobs           chan *job[T]
 
 	// Options
 	fetchInterval time.Duration
+	jobsPerFetch  int
 
 	// Stats
 	statsLock sync.Mutex // protects the stats below
@@ -92,11 +89,11 @@ func New[T any](
 		cancel:  nil,
 		handler: handler,
 
-		jobID:          nil,
 		isJobIDInQueue: xsync.NewMapOf[uint64, bool](),
 		jobs:           make(chan *job[T], defaultJobBufferSize),
 
 		fetchInterval: defaultFetchInterval,
+		jobsPerFetch:  defaultJobsPerFetch,
 
 		statsLock:     sync.Mutex{},
 		jobRunTime:    TimeStat{},
@@ -117,7 +114,10 @@ func New[T any](
 		opt(jq)
 	}
 
-	db, err := jq.openDB()
+	// TODO: figure out better way to do options for JobQueue DB
+	db := NewJobQueueDbBadger[T](jq.dbInMemory) // hardcoding BadgerDB for now. Add option for other DBs later
+
+	err := db.Open(dbPath, name)
 	if err != nil {
 		return nil, err
 	}
@@ -128,12 +128,7 @@ func New[T any](
 	ctx, cancel := context.WithCancel(context.Background())
 	jq.cancel = cancel
 
-	jq.jobID, err = jq.db.GetSequence([]byte("nextJobID"), defaultJobIDSequenceSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start job id sequence: %w", err)
-	}
-
-	// Load jobs from BadgerDB
+	// Load jobs from JobQueue DB
 	go jq.pollJobs(ctx)
 
 	// Start workers
@@ -146,24 +141,15 @@ func New[T any](
 }
 
 func (jq *JobQueue[T]) Enqueue(payload T) (uint64, error) {
-	id, err := jq.jobID.Next()
+	// TODO: simplify by getting and setting the job ID when we add it, rather than on creation
+	id, err := jq.db.GetNextJobId()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get next job id: %w", err)
 	}
 
-	// Create a new job and store it in BadgerDB
+	// Create a new job and store it in queue's database
 	job := newJob(id, payload)
-	jobBytes, err := json.Marshal(job)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal job: %w", err)
-	}
-
-	err = jq.db.Update(func(txn *badger.Txn) error {
-		if err := txn.Set(job.dbKey(), jobBytes); err != nil {
-			return fmt.Errorf("failed to store job: %w", err)
-		}
-		return nil
-	})
+	_, err = jq.db.AddJob(job)
 	if err != nil {
 		jq.logger.Error().Err(err).Uint64("jobID", job.ID).Msg("Failed to enqueue job")
 		return 0, err
@@ -241,14 +227,9 @@ func (jq *JobQueue[T]) processJob(job *job[T], worker int) error {
 	jq.statsLock.Unlock()
 	logger.Info().Msg("Job processed successfully")
 
-	// Now that we've successfully processed the job, we can remove it from BadgerDB
-	jq.logger.Debug().Uint64("jobID", job.ID).Int("worker", worker).Msg("Removing job from BadgerDB")
-	err = jq.db.Update(func(txn *badger.Txn) error {
-		if err := txn.Delete(job.dbKey()); err != nil {
-			return err
-		}
-		return nil
-	})
+	// Now that we've successfully processed the job, we can remove it from JobQueue DB
+	jq.logger.Debug().Uint64("jobID", job.ID).Int("worker", worker).Msg("Removing job from JobQueue DB")
+	err = jq.db.DeleteJob(job.ID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to remove completed job from db")
 		return err
@@ -264,8 +245,8 @@ func (jq *JobQueue[T]) processJob(job *job[T], worker int) error {
 func (jq *JobQueue[T]) Stop() error {
 	jq.logger.Info().Msg("Stopping job queue")
 
-	// Stop jobs fetch from BadgerDB
-	jq.logger.Debug().Msg("Stopping jobs fetch from BadgerDB")
+	// Stop jobs fetch from JobQueue DB
+	jq.logger.Debug().Msg("Stopping jobs fetch from JobQueue DB")
 	jq.cancel()
 
 	// Close the channel to signal the workers to stop
@@ -275,13 +256,10 @@ func (jq *JobQueue[T]) Stop() error {
 	jq.logger.Debug().Msg("Waiting for workers to finish")
 	jq.wg.Wait()
 
-	// Close Badger DB connection
-	jq.logger.Debug().Msg("Closing Badger DB connection")
-	if err := jq.jobID.Release(); err != nil {
-		jq.logger.Error().Err(err).Msg("Failed to release next job id sequence")
-	}
+	// Close JobQueue DB connection
+	jq.logger.Debug().Msg("Closing JobQueue DB connection")
 	if err := jq.db.Close(); err != nil {
-		jq.logger.Error().Err(err).Msg("Failed to close Badger DB connection")
+		jq.logger.Error().Err(err).Msg("Failed to close JobQueue DB connection")
 		return err
 	}
 
@@ -303,7 +281,7 @@ func (jq *JobQueue[T]) Stop() error {
 	return nil
 }
 
-// pollJobs is a long-running goroutine that fetches jobs from BadgerDB and sends them to the worker channels.
+// pollJobs is a long-running goroutine that fetches jobs from the JobQueue DB and sends them to the worker channels.
 func (jq *JobQueue[T]) pollJobs(ctx context.Context) {
 	ticker := time.NewTicker(jq.fetchInterval)
 
@@ -322,73 +300,31 @@ func (jq *JobQueue[T]) pollJobs(ctx context.Context) {
 }
 
 func (jq *JobQueue[T]) fetchJobs(ctx context.Context) error { //nolint:gocognit
-	err := jq.db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchSize = 10
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Seek([]byte(jobDBKeyPrefix)); it.ValidForPrefix([]byte(jobDBKeyPrefix)); it.Next() {
-			item := it.Item()
-			err := item.Value(func(v []byte) error {
-				var job job[T]
-				if err := json.Unmarshal(v, &job); err != nil {
-					jq.logger.Error().Err(err).Uint64("jobID",
-						binary.BigEndian.Uint64(item.Key())).Msg("Failed to unmarshal job")
-					return err
-				}
-
-				if job.Status == JobStatusPending {
-					// If the job is already fetched, skip it
-					_, ok := jq.isJobIDInQueue.Load(job.ID)
-					if ok {
-						return nil
-					}
-
-					select {
-					case <-ctx.Done():
-						jq.logger.Debug().Msg("Context cancelled, stopping iteration")
-						break
-
-					case jq.jobs <- &job:
-						jq.isJobIDInQueue.Store(job.ID, true)
-						jq.logger.Debug().Uint64("jobID", job.ID).Msg("New pending job found and sent to worker")
-
-					default:
-						jq.logger.Warn().Uint64("JobID",
-							job.ID).Msg("Found pending jobs, but job channel is full")
-						return errJobChannelFull
-					}
-				}
-
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	jobs, err := jq.db.FetchJobs(jq.jobsPerFetch)
 	if err != nil {
 		return fmt.Errorf("failed to fetch jobs: %w", err)
 	}
+	for _, job := range jobs {
+		if job.Status == JobStatusPending {
+			// If the job is already fetched, skip it
+			_, ok := jq.isJobIDInQueue.Load(job.ID)
+			if ok {
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			jq.logger.Debug().Msg("Context cancelled, stopping iteration")
+			return nil // stop the fetch loop, but don't return an error
 
+		case jq.jobs <- job:
+			jq.isJobIDInQueue.Store(job.ID, true)
+			jq.logger.Debug().Uint64("jobID", job.ID).Msg("New job found and sent to worker")
+
+		default:
+			jq.logger.Warn().Uint64("JobID", job.ID).Msg("Found jobs, but job channel is full")
+			return errJobChannelFull
+		}
+	}
 	return nil
-}
-
-func (jq *JobQueue[T]) openDB() (*badger.DB, error) {
-	var opts badger.Options
-	if jq.dbInMemory {
-		opts = badger.DefaultOptions("").WithInMemory(true)
-	} else {
-		opts = badger.DefaultOptions(jq.dbPath)
-	}
-	opts.Logger = nil
-
-	db, err := badger.Open(opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open BadgerDB: %w", err)
-	}
-
-	return db, nil
 }
