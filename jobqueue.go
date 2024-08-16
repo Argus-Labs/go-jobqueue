@@ -192,7 +192,7 @@ func (jq *JobQueue[T]) worker(id int) {
 			timeSpentInState := time.Since(jq.busyStateChangeAt.Load())
 			jq.busyStateChangeAt.Store(time.Now())
 			jq.idleTime.RecordTime(timeSpentInState)
-			logger.Debug().Dur("timeIdle", timeSpentInState).Msg("*** Queue now busy *** ")
+			logger.Debug().Dur("timeIdle(ms)", timeSpentInState).Msg("*** Queue now busy *** ")
 		}
 
 		err := jq.processJob(job, id)
@@ -203,7 +203,7 @@ func (jq *JobQueue[T]) worker(id int) {
 				timeSpentInState := time.Since(jq.busyStateChangeAt.Load())
 				jq.busyStateChangeAt.Store(time.Now())
 				jq.busyTime.RecordTime(timeSpentInState)
-				logger.Debug().Dur("timeBusy", timeSpentInState).Msg("*** Queue now idle *** ")
+				logger.Debug().Dur("timeBusy(ms)", timeSpentInState).Msg("*** Queue now idle *** ")
 			}
 		}
 
