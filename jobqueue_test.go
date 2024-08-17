@@ -227,11 +227,11 @@ func TestJobConcurrency(t *testing.T) {
 	// create initial job queue
 
 	// mongo version
-	//jq, err := New[testJob]("ignored", "test-job", 5, complexJobHandler(),
-	//	UseMongoDB[testJob]("mongodb://localhost:27017"))
+	jq, err := New[testJob]("ignored", "test-job", 5, complexJobHandler(),
+		UseMongoDB[testJob]("mongodb://localhost:27017"))
 
 	// badger version
-	jq, err := New[testJob]("/tmp/badger", "test-job", 5, complexJobHandler())
+	//jq, err := New[testJob]("/tmp/badger", "test-job", 5, complexJobHandler())
 
 	assert.NoError(t, err)
 	t.Cleanup(func() {

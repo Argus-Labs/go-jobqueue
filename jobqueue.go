@@ -116,11 +116,14 @@ func New[T any](
 		opt(jq)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	jq.cancel = cancel
+
 	// Open JobQueue DB
 	var db JobQueueDb[T]
 	if jq.dbUseMongo {
 		dbPath = jq.dbPath // this will have been set by the options
-		db = NewJobQueueDbMongo[T]()
+		db = NewJobQueueDbMongo[T](ctx)
 	} else {
 		db = NewJobQueueDbBadger[T](jq.dbInMemory)
 	}
@@ -131,9 +134,6 @@ func New[T any](
 	jq.db = db
 
 	jq.logger.Info().Msg("Starting job queue")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	jq.cancel = cancel
 
 	// Load jobs from JobQueue DB
 	go jq.pollJobs(ctx)
