@@ -2,6 +2,7 @@ package jobqueue
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/dgraph-io/badger/v4"
