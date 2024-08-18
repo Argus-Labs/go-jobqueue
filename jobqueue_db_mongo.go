@@ -81,19 +81,38 @@ func (jqdb *JobQueueDbMongo[T]) GetNextJobId() (uint64, error) {
 		} else {
 			return 0, fmt.Errorf("failed to get next job id: %w", result.Err())
 		}
+	} else {
+		raw, err := result.Raw()
+		if err != nil {
+			return 0, fmt.Errorf("failed to get raw result from mongo: %w", err)
+		}
+		val := raw.Lookup("next_job_id")
+		nextJobId = uint64(val.AsInt64())
 	}
-	raw, err := result.Raw()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get raw result from mongo: %w", err)
-	}
-	val := raw.Lookup("next_job_id")
-	nextJobId = uint64(val.AsInt64())
 	return nextJobId, nil
 }
 
 // FetchJobs(count int) ([]*job[T], error)
 func (jqdb *JobQueueDbMongo[T]) FetchJobs(count int) ([]*job[T], error) {
-	return nil, nil
+	// create a new array of jobs
+	jobs := make([]*job[T], 0, count)
+
+	opts := options.Find().SetLimit(int64(count)).SetAllowPartialResults(true)
+	cursor, err := jqdb.coll.Find(jqdb.ctx, bson.D{}, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch jobs from mongo collection: %w", err)
+	}
+	defer cursor.Close(jqdb.ctx)
+	for cursor.Next(jqdb.ctx) {
+		var j job[T]
+		err := cursor.Decode(&j)
+		if err != nil {
+			continue // skip this job
+		} else {
+			jobs = append(jobs, &j)
+		}
+	}
+	return jobs, nil
 }
 
 // ReadJob(jobID uint64) (*job[T], error)
@@ -129,9 +148,9 @@ func (jqdb *JobQueueDbMongo[T]) AddJob(job *job[T]) (uint64, error) {
 
 // DeleteJob(jobID uint64) error
 func (jqdb *JobQueueDbMongo[T]) DeleteJob(jobID uint64) error {
-	result := jqdb.coll.FindOneAndDelete(jqdb.ctx, bson.D{{Key: "id", Value: jobID}})
-	if !errors.Is(result.Err(), mongo.ErrNoDocuments) {
-		return fmt.Errorf("failed to delete job from mongo collection: %w", result.Err())
+	_, err := jqdb.coll.DeleteOne(jqdb.ctx, bson.D{{Key: "id", Value: jobID}})
+	if err != nil {
+		return fmt.Errorf("failed to delete job from mongo collection: %w", err)
 	}
 	return nil
 }
