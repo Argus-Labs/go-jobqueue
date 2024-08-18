@@ -38,5 +38,9 @@ func (ts *TimeStat) RecordTime(duration time.Duration) {
 }
 
 func (ts *TimeStat) String() string {
-	return "tot " + ts.TotalTime.String() + " cnt " + strconv.FormatInt(ts.Count, 10) + " avg " + ts.AvgTime().String() + " min " + ts.MinTime.String() + " max " + ts.MaxTime.String()
+	return "tot " + ts.TotalTime.String() +
+	       " cnt " + strconv.FormatInt(ts.Count, 10) +
+	       " avg " + ts.AvgTime().String() +
+	       " min " + ts.MinTime.String() +
+	       " max " + ts.MaxTime.String()
 }
