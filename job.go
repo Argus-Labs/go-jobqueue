@@ -21,9 +21,9 @@ type job[T any] struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func newJob[T any](id uint64, payload T) *job[T] {
+func newJob[T any](payload T) *job[T] {
 	return &job[T]{
-		ID:        id,
+		ID:        0, // ID is set when the job is added to the queue
 		Payload:   payload,
 		Status:    JobStatusPending,
 		CreatedAt: time.Now(),

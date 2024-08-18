@@ -1,6 +1,7 @@
 package jobqueue
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -13,9 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
 
-const BadgerDBPath = "/tmp/badger"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+)
 
 func init() { //nolint:gochecknoinits // for testing
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -52,7 +54,6 @@ func TestNewJobQueue(t *testing.T) {
 	// Test cases
 	testCases := []struct {
 		name          string
-		dbPath        string
 		queueName     string
 		workers       int
 		options       []Option[testJob]
@@ -61,7 +62,6 @@ func TestNewJobQueue(t *testing.T) {
 	}{
 		{
 			name:          "Valid configuration",
-			dbPath:        "/tmp/test_jobqueue_1",
 			queueName:     "test-queue-1",
 			workers:       2,
 			options:       []Option[testJob]{WithInMemDB[testJob]()},
@@ -69,7 +69,6 @@ func TestNewJobQueue(t *testing.T) {
 		},
 		{
 			name:          "Invalid workers count",
-			dbPath:        "/tmp/test_jobqueue_2",
 			queueName:     "test-queue-2",
 			workers:       -1,
 			options:       []Option[testJob]{WithInMemDB[testJob]()},
@@ -77,7 +76,6 @@ func TestNewJobQueue(t *testing.T) {
 		},
 		{
 			name:          "Zero workers",
-			dbPath:        "/tmp/test_jobqueue_3",
 			queueName:     "test-queue-3",
 			workers:       0,
 			options:       []Option[testJob]{WithInMemDB[testJob]()},
@@ -91,7 +89,7 @@ func TestNewJobQueue(t *testing.T) {
 			t.Parallel()
 
 			// Act
-			jq, err := New[testJob](tc.dbPath, tc.queueName, tc.workers, testJobHandler(), tc.options...)
+			jq, err := New[testJob](tc.queueName, tc.workers, testJobHandler(), tc.options...)
 
 			// Assert
 			if tc.expectedError {
@@ -116,7 +114,7 @@ func TestNewJobQueue(t *testing.T) {
 func TestJobQueue_Enqueue(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInMemDB[testJob]())
+	jq, err := New[testJob]("test-job", 0, testJobHandler(), WithInMemDB[testJob]())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -144,7 +142,7 @@ func TestJobQueue_Enqueue(t *testing.T) {
 func TestJobQueue_ProcessJob(t *testing.T) {
 	cleanupBadgerDB(t)
 
-	jq, err := New[testJob](BadgerDBPath, "test-job", 0, testJobHandler(), WithInMemDB[testJob]())
+	jq, err := New[testJob]("test-job", 0, testJobHandler(), WithInMemDB[testJob]())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -190,7 +188,7 @@ func TestJobQueue_Recovery(t *testing.T) {
 	cleanupBadgerDB(t)
 
 	// Create initial job queue
-	jq, err := New[testJob]("/tmp/badger", "test-job", 0, testJobHandler())
+	jq, err := New[testJob]("test-job", 0, testJobHandler(), WithBadgerDB[testJob]("/tmp/badger"))
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -205,7 +203,7 @@ func TestJobQueue_Recovery(t *testing.T) {
 	assert.NoError(t, jq.Stop())
 
 	// Create recovered job queue
-	recoveredJq, err := New[testJob]("/tmp/badger", "test-job", 0, testJobHandler())
+	recoveredJq, err := New[testJob]("test-job", 0, testJobHandler(), WithBadgerDB[testJob]("/tmp/badger"))
 	assert.NoError(t, err)
 
 	j := <-recoveredJq.jobs
@@ -221,24 +219,29 @@ func TestJobQueue_Recovery(t *testing.T) {
 	assert.NoError(t, recoveredJq.Stop())
 }
 
-func TestJobConcurrency(t *testing.T) {
+func TestBadgerJobConcurrency(t *testing.T) {
 	cleanupBadgerDB(t)
-
-	// create initial job queue
-
-	// mongo version
-	jq, err := New[testJob]("ignored", "test-job", 5, complexJobHandler(),
-		UseMongoDB[testJob]("mongodb://localhost:27017"))
-
-	// badger version
-	//jq, err := New[testJob]("/tmp/badger", "test-job", 5, complexJobHandler())
-
+	jq, err := New[testJob]("test-job", 5, complexJobHandler(), WithBadgerDB[testJob]("/tmp/badger"))
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, jq.Stop())
 		cleanupBadgerDB(t)
 	})
+	DoJobConcurrencyTest(jq, t)
+}
 
+func TestMongoJobConcurrency(t *testing.T) {
+	cleanupMongoDB(t)
+	jq, err := New[testJob]("test-job", 5, complexJobHandler(), WithMongoDB[testJob]("mongodb://localhost:27017"))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, jq.Stop())
+		cleanupMongoDB(t)
+	})
+	DoJobConcurrencyTest(jq, t)
+}
+
+func DoJobConcurrencyTest(jq *JobQueue[testJob], t *testing.T) {
 	// Queue a bunch of jobs, which should be processed concurrently
 	ids := make([]uint64, 0)
 	for i := 0; i < 20; i++ {
@@ -272,14 +275,23 @@ func TestJobConcurrency(t *testing.T) {
 		_, ok := jq.isJobIDInQueue.Load(uint64(id))
 		assert.False(t, ok)
 
-		// Check that the job is no longer in the badger DB
+		// Check that the job is no longer in the JobQueue DB
 		job, err := jq.db.ReadJob(uint64(id))
-		assert.Error(t, err, badger.ErrKeyNotFound)
+		assert.Error(t, err, ErrJobNotFound)
 		assert.Nil(t, job)
 	}
 
 }
 
 func cleanupBadgerDB(t *testing.T) {
-	assert.NoError(t, os.RemoveAll(BadgerDBPath))
+	assert.NoError(t, os.RemoveAll("/tmp/badger"))
+}
+
+func cleanupMongoDB(t *testing.T) {
+	path := "mongodb://localhost:27017"
+	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(path))
+	assert.NoError(t, err)
+	db := client.Database("job_queues")
+	assert.NoError(t, db.Drop(context.TODO()))
+	assert.NoError(t, client.Disconnect(context.Background()))
 }

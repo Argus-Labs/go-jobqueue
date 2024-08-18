@@ -44,7 +44,7 @@ func (jqdb *JobQueueDbMongo[T]) Open(path string, queueName string) error {
 		return fmt.Errorf("failed to open mongo database job_queues")
 	}
 	// holds the jobs for the queue
-	jqdb.jobQueueName = queueName + "_jobs"
+	jqdb.jobQueueName = dbCollectionNameForQueue(queueName)
 	jqdb.coll = jqdb.db.Collection(jqdb.jobQueueName)
 	if jqdb.coll == nil {
 		return fmt.Errorf("failed to open collection job_queues.%s", jqdb.jobQueueName)
@@ -98,17 +98,29 @@ func (jqdb *JobQueueDbMongo[T]) FetchJobs(count int) ([]*job[T], error) {
 
 // ReadJob(jobID uint64) (*job[T], error)
 func (jqdb *JobQueueDbMongo[T]) ReadJob(jobID uint64) (*job[T], error) {
-	return nil, nil
-}
-
-// UpdateJob(job *job[T]) error
-func (jqdb *JobQueueDbMongo[T]) UpdateJob(job *job[T]) error {
-	return nil
+	result := jqdb.coll.FindOne(jqdb.ctx, bson.D{{Key: "id", Value: jobID}})
+	if result.Err() != nil {
+		if errors.Is(result.Err(), mongo.ErrNoDocuments) {
+			return nil, ErrJobNotFound
+		}
+		return nil, fmt.Errorf("failed to read job from mongo collection: %w", result.Err())
+	}
+	var j job[T]
+	err := result.Decode(&j)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode job from mongo collection: %w", err)
+	}
+	return &j, nil
 }
 
 // AddJob(job *job[T]) (uint64, error) // returns the job ID
 func (jqdb *JobQueueDbMongo[T]) AddJob(job *job[T]) (uint64, error) {
-	_, err := jqdb.coll.InsertOne(jqdb.ctx, job)
+	id, err := jqdb.GetNextJobId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get next job id: %w", err)
+	}
+	job.ID = id
+	_, err = jqdb.coll.InsertOne(jqdb.ctx, job)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert job into mongo collection: %w", err)
 	}
@@ -117,5 +129,14 @@ func (jqdb *JobQueueDbMongo[T]) AddJob(job *job[T]) (uint64, error) {
 
 // DeleteJob(jobID uint64) error
 func (jqdb *JobQueueDbMongo[T]) DeleteJob(jobID uint64) error {
+	result := jqdb.coll.FindOneAndDelete(jqdb.ctx, bson.D{{Key: "id", Value: jobID}})
+	if !errors.Is(result.Err(), mongo.ErrNoDocuments) {
+		return fmt.Errorf("failed to delete job from mongo collection: %w", result.Err())
+	}
 	return nil
+}
+
+func dbCollectionNameForQueue(queueName string) string {
+	// TODO: normalize queueName
+	return queueName + "_jobs"
 }

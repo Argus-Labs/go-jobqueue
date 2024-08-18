@@ -31,10 +31,11 @@ const defaultJobBufferSize = 1000
 const defaultJobsPerFetch = 10
 
 type JobQueue[T any] struct {
-	db         JobQueueDb[T]
-	dbPath     string
-	dbInMemory bool
-	dbUseMongo bool
+	db          JobQueueDb[T]
+	dbPath      string
+	dbInMemory  bool
+	dbUseMongo  bool
+	dbUseBadger bool
 
 	wg      sync.WaitGroup
 	logger  zerolog.Logger
@@ -71,8 +72,7 @@ type JobQueue[T any] struct {
 // New creates a new JobQueue with the specified database, name, and number
 // of worker goroutines. It initializes the job queue, starts the worker goroutines,
 // and returns the JobQueue instance and an error, if any.
-func New[T any](
-	dbPath string, name string, workers int, handler func(JobContext, T) error, opts ...Option[T],
+func New[T any](name string, workers int, handler func(JobContext, T) error, opts ...Option[T],
 ) (*JobQueue[T], error) {
 	if workers < 0 {
 		return nil, errors.New("invalid number of workers")
@@ -81,10 +81,11 @@ func New[T any](
 	}
 
 	jq := &JobQueue[T]{
-		db:         nil,
-		dbPath:     dbPath,
-		dbInMemory: false,
-		dbUseMongo: false,
+		db:          nil,
+		dbPath:      "",
+		dbInMemory:  false,
+		dbUseMongo:  false,
+		dbUseBadger: false,
 
 		wg:      sync.WaitGroup{},
 		logger:  log.With().Str("module", "JobQueue").Str("jobName", name).Logger(),
@@ -115,6 +116,10 @@ func New[T any](
 	for _, opt := range opts {
 		opt(jq)
 	}
+	// make sure we have a valid db option, default to in memory if none provided
+	if !jq.dbUseBadger && !jq.dbUseMongo && !jq.dbInMemory {
+		jq.dbInMemory = true
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	jq.cancel = cancel
@@ -122,12 +127,11 @@ func New[T any](
 	// Open JobQueue DB
 	var db JobQueueDb[T]
 	if jq.dbUseMongo {
-		dbPath = jq.dbPath // this will have been set by the options
 		db = NewJobQueueDbMongo[T](ctx)
 	} else {
 		db = NewJobQueueDbBadger[T](jq.dbInMemory)
 	}
-	err := db.Open(dbPath, name)
+	err := db.Open(jq.dbPath, name)
 	if err != nil {
 		return nil, err
 	}
@@ -148,25 +152,19 @@ func New[T any](
 }
 
 func (jq *JobQueue[T]) Enqueue(payload T) (uint64, error) {
-	// TODO: simplify by getting and setting the job ID when we add it, rather than on creation
-	id, err := jq.db.GetNextJobId()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get next job id: %w", err)
-	}
-
 	// Create a new job and store it in queue's database
-	job := newJob(id, payload)
-	_, err = jq.db.AddJob(job)
+	job := newJob(payload)
+	id, err := jq.db.AddJob(job)
 	if err != nil {
-		jq.logger.Error().Err(err).Uint64("jobID", job.ID).Msg("Failed to enqueue job")
+		jq.logger.Error().Err(err).Uint64("jobID", id).Msg("Failed to enqueue job")
 		return 0, err
 	}
 	jq.statsLock.Lock()
 	jq.jobsEnqueued++
 	jq.statsLock.Unlock()
 
-	jq.logger.Info().Uint64("jobID", job.ID).Msg("job enqueued successfully")
-	return job.ID, nil
+	jq.logger.Info().Uint64("jobID", id).Msg("job enqueued successfully")
+	return id, nil
 }
 
 // worker processes jobs received from the job queue and logs any errors encountered.

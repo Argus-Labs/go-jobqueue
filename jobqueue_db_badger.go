@@ -128,6 +128,9 @@ func (jqdb *JobQueueDbBadger[T]) ReadJob(jobID uint64) (*job[T], error) {
 		return err
 	})
 	if err != nil {
+		if err == badger.ErrKeyNotFound {
+			return nil, ErrJobNotFound
+		}
 		return nil, fmt.Errorf("failed to read job: %w", err)
 	}
 	var theJob job[T]
@@ -140,11 +143,12 @@ func (jqdb *JobQueueDbBadger[T]) ReadJob(jobID uint64) (*job[T], error) {
 	return &theJob, nil
 }
 
-func (jqdb *JobQueueDbBadger[T]) UpdateJob(job *job[T]) error {
-	return nil
-}
-
 func (jqdb *JobQueueDbBadger[T]) AddJob(job *job[T]) (uint64, error) {
+	id, err := jqdb.GetNextJobId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get next job id: %w", err)
+	}
+	job.ID = id
 	jobBytes, err := json.Marshal(job)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal job: %w", err)
