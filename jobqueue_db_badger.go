@@ -128,7 +128,7 @@ func (jqdb *JobQueueDbBadger[T]) ReadJob(jobID uint64) (*job[T], error) {
 		return err
 	})
 	if err != nil {
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return nil, ErrJobNotFound
 		}
 		return nil, fmt.Errorf("failed to read job: %w", err)
